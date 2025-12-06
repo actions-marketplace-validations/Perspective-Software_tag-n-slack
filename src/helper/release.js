@@ -2,10 +2,45 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const ghRelease = require('gh-release');
 const axios = require('axios');
+const convertTicketsToLinks = require('./convertTicketsToLinks');
+
+const STRATEGY_INPUT_NAME = 'version-increment-strategy';
+
+/**
+ * This strategy retrieves the version from package.json and the release message from CHANGELOG.md.
+ */
+const CHANGELOG_FILE_STRATEGY = 'changelog-file';
+
+/**
+ * This strategy retrieves the version and message from the merge commit.
+ * The version is the 7-digit hash, and the message is the commit message.
+ *
+ * It is recommended to use this strategy with "Squash and Merge",
+ * where the PR title and description become the commit message.
+ */
+const GITHUB_RELEASES_STRATEGY = 'github-releases';
 
 const internals = {};
 
 const token = core.getInput('github-access-token');
+
+internals.getReleaseStrategy = () => {
+    const strategy = core.getInput(STRATEGY_INPUT_NAME) || CHANGELOG_FILE_STRATEGY;
+
+    if (![CHANGELOG_FILE_STRATEGY, GITHUB_RELEASES_STRATEGY].includes(strategy)) {
+        throw `${STRATEGY_INPUT_NAME} must be one of: ${CHANGELOG_FILE_STRATEGY}, ${GITHUB_RELEASES_STRATEGY}. Received: ${strategy}`;
+    }
+
+    return strategy;
+};
+
+internals.isReleaseStrategyChangelogFile = () => {
+    return internals.getReleaseStrategy() === CHANGELOG_FILE_STRATEGY;
+};
+
+internals.isReleaseStrategyGithubReleases = () => {
+    return internals.getReleaseStrategy() === GITHUB_RELEASES_STRATEGY;
+};
 
 internals.fetchGithubReleases = () => {
     const request = {
@@ -24,9 +59,21 @@ internals.fetchGithubReleases = () => {
         });
 };
 
-internals.createGithubRelease = () => {
+internals.createGithubRelease = ({ version, message }) => {
     return new Promise((resolve, reject) => {
-        const options = {};
+        const options = internals.isReleaseStrategyGithubReleases()
+            ? {
+                  tag_name: version,
+                  target_commitish: core.getInput('target-commitish') || 'main',
+                  name: version,
+                  body: message,
+                  draft: false,
+                  prerelease: false,
+                  owner: core.getInput('project-owner'),
+                  repo: core.getInput('project-name'),
+                  cli: true,
+              }
+            : {};
 
         options.auth = { token };
         ghRelease(options, (err, result) => {
